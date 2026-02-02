@@ -1,0 +1,146 @@
+{
+  "name": "Import Discogs Collection",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "8c6d2e56-3b4d-4f8e-9b2a-1c7f8e9d4a5b",
+      "name": "When clicking 'Test workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.discogs.com/users/{{ $env.DISCOGS_USERNAME }}/collection/folders/0/releases",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "100"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Discogs token={{ $env.DISCOGS_API_TOKEN }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "N8nMusicCuration/1.0"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-5e6f-7g8h-9i0j-k1l2m3n4o5p6",
+      "name": "Get Discogs Collection",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [470, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse Discogs collection releases\nconst releases = $input.first().json.releases || [];\n\nconst parsedReleases = releases.map(release => {\n  const basicInfo = release.basic_information;\n  \n  return {\n    json: {\n      artist: basicInfo.artists?.[0]?.name || 'Unknown',\n      title: basicInfo.title,\n      discogsReleaseId: basicInfo.id,\n      genre: basicInfo.genres?.[0] || null,\n      format: basicInfo.formats?.[0]?.name || null,\n      year: basicInfo.year,\n      // We'll add musical properties later through enrichment\n      musical_key: null,\n      camelot_key: null,\n      bpm: null,\n      energy: null\n    }\n  };\n});\n\nconsole.log(`Parsed ${parsedReleases.length} releases from Discogs collection`);\n\nreturn parsedReleases;"
+      },
+      "id": "b2c3d4e5-6f7g-8h9i-0j1k-l2m3n4o5p6q7",
+      "name": "Parse Collection Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [690, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO personal_collection (artist, title, discogs_release_id, genre, format, musical_key, camelot_key, bpm, energy)\nVALUES (\n  '{{ $json.artist }}',\n  '{{ $json.title }}',\n  {{ $json.discogsReleaseId }},\n  '{{ $json.genre }}',\n  '{{ $json.format }}',\n  {{ $json.musical_key }},\n  {{ $json.camelot_key }},\n  {{ $json.bpm }},\n  {{ $json.energy }}\n)\nON CONFLICT (artist, title) \nDO UPDATE SET \n  discogs_release_id = EXCLUDED.discogs_release_id,\n  genre = EXCLUDED.genre,\n  format = EXCLUDED.format\nRETURNING id, artist, title;",
+        "options": {}
+      },
+      "id": "c3d4e5f6-7g8h-9i0j-1k2l-m3n4o5p6q7r8",
+      "name": "Store in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [910, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Summary of import results\nconst items = $input.all();\n\nconst summary = {\n  total_imported: items.length,\n  artists: [...new Set(items.map(i => i.json.artist))].length,\n  timestamp: new Date().toISOString(),\n  message: `Successfully imported ${items.length} tracks from Discogs collection`\n};\n\nconsole.log('Import Summary:', summary);\n\nreturn [{ json: summary }];"
+      },
+      "id": "d4e5f6g7-8h9i-0j1k-2l3m-n4o5p6q7r8s9",
+      "name": "Generate Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1130, 300]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking 'Test workflow'": {
+      "main": [
+        [
+          {
+            "node": "Get Discogs Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Discogs Collection": {
+      "main": [
+        [
+          {
+            "node": "Parse Collection Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Collection Data": {
+      "main": [
+        [
+          {
+            "node": "Store in PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Generate Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "n8n-justsaad"
+  },
+  "id": "import-discogs-collection",
+  "tags": []
+}

@@ -1,0 +1,467 @@
+{
+  "name": "Music Curation - Complete Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "trigger-daily-6am",
+      "name": "Daily Trigger 6am",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [250, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const executionId = $execution.id;\nconst workflowId = $workflow.id;\n\nreturn [{\n  json: {\n    executionId,\n    workflowId,\n    startedAt: new Date().toISOString(),\n    status: 'running'\n  }\n}];"
+      },
+      "id": "init-execution-log",
+      "name": "Initialize Execution Log",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [470, 500]
+    },
+    {
+      "parameters": {
+        "url": "https://daily.bandcamp.com/",
+        "method": "GET",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "fetch-bandcamp",
+      "name": "Fetch Bandcamp Daily",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [690, 300],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "url": "=https://api.discogs.com/users/{{ $env.DISCOGS_USERNAME }}/wantlist",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "100"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Discogs token={{ $env.DISCOGS_API_TOKEN }}"
+            },
+            {
+              "name": "User-Agent",
+              "value": "N8nMusicCuration/1.0"
+            }
+          ]
+        }
+      },
+      "id": "fetch-discogs",
+      "name": "Get Discogs Wantlist",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [690, 500],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "parameters": {
+        "url": "https://ra.co/events/fr/paris",
+        "method": "GET",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "fetch-ra",
+      "name": "Fetch RA Paris Events",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [690, 700],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst cheerio = require('cheerio');\n\nconst tracks = [];\n\nitems.forEach(item => {\n  if (item.json.error) return;\n\n  const html = item.json.data;\n  const $ = cheerio.load(html);\n\n  $('.article-feature, .essential-release').each((i, elem) => {\n    const title = $(elem).find('.title, h2').text().trim();\n    const artist = $(elem).find('.artist, .byline').text().trim();\n    const url = $(elem).find('a').attr('href');\n    const genre = $(elem).find('.genre').text().trim();\n\n    if (title && artist) {\n      tracks.push({\n        json: {\n          artist,\n          title,\n          source: 'bandcamp',\n          sourceUrl: url,\n          genre,\n          fetchedAt: new Date().toISOString()\n        }\n      });\n    }\n  });\n});\n\nreturn tracks.length > 0 ? tracks : [{json: {error: 'No Bandcamp tracks', source: 'bandcamp'}}];"
+      },
+      "id": "parse-bandcamp",
+      "name": "Parse Bandcamp HTML",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const myWantlist = $input.first().json.wants || [];\n\nreturn myWantlist.slice(0, 20).map(want => ({\n  json: {\n    artist: want.basic_information.artists[0]?.name,\n    title: want.basic_information.title,\n    source: 'discogs',\n    sourceUrl: want.basic_information.resource_url,\n    discogsReleaseId: want.basic_information.id,\n    genre: want.basic_information.genres?.[0],\n    fetchedAt: new Date().toISOString()\n  }\n}));"
+      },
+      "id": "parse-discogs",
+      "name": "Parse Discogs Wantlist",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const html = $input.first().json.data;\nconst cheerio = require('cheerio');\nconst $ = cheerio.load(html);\n\nconst events = [];\n\n$('.event-item, article').each((i, elem) => {\n  const artists = $(elem).find('.lineup, .event-lineup').text().split(',').map(a => a.trim());\n  const eventUrl = $(elem).find('a').attr('href');\n\n  artists.forEach(artist => {\n    if (artist) {\n      events.push({\n        json: {\n          artist,\n          title: artist,\n          source: 'resident_advisor',\n          sourceUrl: `https://ra.co${eventUrl}`,\n          genre: 'electronic',\n          fetchedAt: new Date().toISOString()\n        }\n      });\n    }\n  });\n});\n\nreturn events.length > 0 ? events : [{json: {error: 'No RA events', source: 'resident_advisor'}}];"
+      },
+      "id": "parse-ra",
+      "name": "Parse RA Events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [910, 700]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineAll"
+      },
+      "id": "merge-sources",
+      "name": "Merge Sources",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [1130, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst allTracks = items.flatMap(item => {\n  if (item.json.error) {\n    console.error('Source error:', item.json.source, item.json.error);\n    return [];\n  }\n  return Array.isArray(item.json) ? item.json : [item.json];\n});\n\nconst uniqueTracks = new Map();\n\nallTracks.forEach(track => {\n  const normalizedArtist = (track.artist || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n  const normalizedTitle = (track.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');\n  const key = `${normalizedArtist}-${normalizedTitle}`;\n\n  if (!uniqueTracks.has(key)) {\n    uniqueTracks.set(key, {\n      ...track,\n      sources: [track.source],\n      discoveryScore: 1\n    });\n  } else {\n    const existing = uniqueTracks.get(key);\n    if (!existing.sources.includes(track.source)) {\n      existing.sources.push(track.source);\n      existing.discoveryScore = existing.sources.length;\n    }\n    uniqueTracks.set(key, existing);\n  }\n});\n\nconst deduplicatedTracks = Array.from(uniqueTracks.values());\n\nconsole.log(`Original: ${allTracks.length}, Deduplicated: ${deduplicatedTracks.length}`);\n\nreturn deduplicatedTracks.map(track => ({json: track}));"
+      },
+      "id": "deduplicate-tracks",
+      "name": "Deduplicate Tracks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1350, 500]
+    },
+    {
+      "parameters": {
+        "batchSize": 5,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Split Into Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [1570, 500]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.getsongkey.com/song/{{ encodeURIComponent($json.artist + ' ' + $json.title) }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.GETSONGKEY_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "get-key-bpm",
+      "name": "Get Key and BPM",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1790, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/youtube/v3/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "part",
+              "value": "snippet"
+            },
+            {
+              "name": "q",
+              "value": "={{ $json.artist + ' ' + $json.title }}"
+            },
+            {
+              "name": "type",
+              "value": "video"
+            },
+            {
+              "name": "maxResults",
+              "value": "1"
+            },
+            {
+              "name": "key",
+              "value": "={{ $env.YOUTUBE_API_KEY }}"
+            }
+          ]
+        }
+      },
+      "id": "search-youtube",
+      "name": "Search YouTube",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1790, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM personal_collection WHERE musical_key IS NOT NULL AND bpm IS NOT NULL",
+        "options": {}
+      },
+      "id": "get-collection",
+      "name": "Get Personal Collection",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [1350, 700],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "=INSERT INTO music_recommendations (artist, title, sources, discovery_score, musical_key, camelot_key, bpm, genre, youtube_url, avg_vinyl_price, spectral_features, mix_suggestions, fetched_at, enriched_at, source_url, bandcamp_url, discogs_release_id)\nVALUES (\n  '{{ $json.artist }}',\n  '{{ $json.title }}',\n  '{{ JSON.stringify($json.sources) }}',\n  {{ $json.discoveryScore }},\n  '{{ $json.key }}',\n  '{{ $json.camelotKey }}',\n  {{ $json.bpm }},\n  '{{ $json.genre }}',\n  '{{ $json.youtubeUrl }}',\n  {{ $json.avgVinylPrice }},\n  '{{ JSON.stringify($json.spectralFeatures) }}',\n  '{{ JSON.stringify($json.mixSuggestions) }}',\n  '{{ $json.fetchedAt }}',\n  '{{ $json.enrichedAt }}',\n  '{{ $json.sourceUrl }}',\n  '{{ $json.bandcampUrl }}',\n  {{ $json.discogsReleaseId }}\n)\nON CONFLICT (artist, title) \nDO UPDATE SET \n  sources = EXCLUDED.sources,\n  discovery_score = EXCLUDED.discovery_score,\n  enriched_at = EXCLUDED.enriched_at\nRETURNING id;",
+        "options": {}
+      },
+      "id": "store-postgres",
+      "name": "Store in PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.3,
+      "position": [2230, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "seconds"
+      },
+      "id": "wait-rate-limit",
+      "name": "Wait 1 Second",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [2450, 500]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily Trigger 6am": {
+      "main": [
+        [
+          {
+            "node": "Initialize Execution Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Initialize Execution Log": {
+      "main": [
+        [
+          {
+            "node": "Fetch Bandcamp Daily",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Discogs Wantlist",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch RA Paris Events",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Personal Collection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Bandcamp Daily": {
+      "main": [
+        [
+          {
+            "node": "Parse Bandcamp HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Discogs Wantlist": {
+      "main": [
+        [
+          {
+            "node": "Parse Discogs Wantlist",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch RA Paris Events": {
+      "main": [
+        [
+          {
+            "node": "Parse RA Events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Bandcamp HTML": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Discogs Wantlist": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Parse RA Events": {
+      "main": [
+        [
+          {
+            "node": "Merge Sources",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Merge Sources": {
+      "main": [
+        [
+          {
+            "node": "Deduplicate Tracks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deduplicate Tracks": {
+      "main": [
+        [
+          {
+            "node": "Split Into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Into Batches": {
+      "main": [
+        [
+          {
+            "node": "Get Key and BPM",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Search YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Key and BPM": {
+      "main": [
+        [
+          {
+            "node": "Store in PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search YouTube": {
+      "main": [
+        [
+          {
+            "node": "Store in PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store in PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Wait 1 Second",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1 Second": {
+      "main": [
+        [
+          {
+            "node": "Split Into Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "n8n-justsaad"
+  },
+  "id": "music-curation-main",
+  "tags": []
+}
